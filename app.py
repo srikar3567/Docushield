@@ -12,21 +12,44 @@ st.markdown("---")
 
 def extract_metadata(image):
     meta_info = {
-        "Software": "No editing software signature found (Clean)",
+        "Software": "Clean / Original (No Editing Tool Detected)",
         "Modified Date/Time": "Not recorded / Stripped",
-        "Camera/Device": "Unknown / Scanned"
+        "Camera/Device": "Unknown / Scanned",
+        "Is_AI": False,
+        "Is_Edited": False
     }
     try:
         exif = image.getexif()
         if exif:
             for tag_id, value in exif.items():
                 tag = ExifTags.TAGS.get(tag_id, tag_id)
-                if tag == "Software":
+                val_str = str(value).strip().lower()
+                
+                # Check for AI Generation Signatures
+                ai_signatures = ["midjourney", "stable diffusion", "dall-e", "dreamstudio", "novelai", "comfyui", "leonardo"]
+                if any(ai_sig in val_str for ai_sig in ai_signatures):
+                    meta_info["Software"] = f"🤖 AI Generated Image Signature Detected ({value})"
+                    meta_info["Is_AI"] = True
+                    continue
+
+                # Check for Photo Editing Software Signatures
+                edit_signatures = ["photoshop", "gimp", "canva", "picsart", "lightroom", "pixlr"]
+                if any(edit_sig in val_str for edit_sig in edit_signatures):
+                    meta_info["Software"] = f"⚠️ Photo Editor Detected ({value})"
+                    meta_info["Is_Edited"] = True
+                    continue
+
+                # Normal metadata mapping
+                if tag == "Software" and not meta_info["Is_AI"] and not meta_info["Is_Edited"]:
                     meta_info["Software"] = str(value)
-                elif tag == "DateTime":
-                    meta_info["Modified Date/Time"] = str(value)
-                elif tag == "Model":
-                    meta_info["Camera/Device"] = str(value)
+                elif tag in ["DateTime", "DateTimeOriginal", "DateTimeDigitized"]:
+                    if meta_info["Modified Date/Time"] == "Not recorded / Stripped":
+                        meta_info["Modified Date/Time"] = str(value)
+                elif tag in ["Model", "Make"]:
+                    if meta_info["Camera/Device"] == "Unknown / Scanned":
+                        meta_info["Camera/Device"] = str(value)
+                    else:
+                        meta_info["Camera/Device"] += f" ({value})"
     except Exception:
         pass
     return meta_info
@@ -83,14 +106,11 @@ if uploaded_file is not None:
         st.metric(label="Tamper Suspicion Score", value=f"{score}%")
         
     with v_col2:
-        # Check if suspicious software is detected in metadata
-        suspicious_keywords = ["photoshop", "gimp", "canva", "picsart", "lightroom"]
-        software_detected = any(k in metadata["Software"].lower() for k in suspicious_keywords)
-        
-        if score > 50 or software_detected:
+        if metadata["Is_AI"]:
+            st.error("🚨 **Verdict: Synthetic AI-Generated Image Detected**")
+            st.write("Artificial intelligence synthesis footprints were matched in document parameters.")
+        elif metadata["Is_Edited"] or score > 50:
             st.error("⚠️ **Verdict: Potential Tampering / Digital Manipulation Detected**")
-            if software_detected:
-                st.warning(f"🚨 **Alert:** Image was processed using photo editing software: `{metadata['Software']}`")
             st.write("Discrepancies identified in high-frequency compression regions or editing footprints.")
         else:
             st.success("✅ **Verdict: Document Appears Authentic**")
@@ -98,10 +118,10 @@ if uploaded_file is not None:
 
     # Display Metadata Section
     st.markdown("---")
-    st.subheader("🔍 EXIF Metadata & Timestamp Audit")
+    st.subheader("🔍 EXIF Metadata & Forensic Audit")
     m_col1, m_col2, m_col3 = st.columns(3)
     with m_col1:
-        st.info(f"**Software / Editor:**\n\n{metadata['Software']}")
+        st.info(f"**Software / Origin:**\n\n{metadata['Software']}")
     with m_col2:
         st.info(f"**Modification Date & Time:**\n\n{metadata['Modified Date/Time']}")
     with m_col3:
