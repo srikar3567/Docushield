@@ -1,5 +1,5 @@
 import streamlit as st
-from PIL import Image, ImageChops, ImageEnhance
+from PIL import Image, ImageChops, ImageEnhance, ExifTags
 import numpy as np
 import os
 
@@ -10,59 +10,99 @@ st.caption("Smart India Hackathon | Problem Statement: SIH26188")
 st.caption("Developed by: **Srikar** | Dept. of ECE, IIIT Nuzvid")
 st.markdown("---")
 
-def analyze_document(image, filename):
+def extract_metadata(image):
+    meta_info = {
+        "Software": "No editing software signature found (Clean)",
+        "Modified Date/Time": "Not recorded / Stripped",
+        "Camera/Device": "Unknown / Scanned"
+    }
+    try:
+        exif = image.getexif()
+        if exif:
+            for tag_id, value in exif.items():
+                tag = ExifTags.TAGS.get(tag_id, tag_id)
+                if tag == "Software":
+                    meta_info["Software"] = str(value)
+                elif tag == "DateTime":
+                    meta_info["Modified Date/Time"] = str(value)
+                elif tag == "Model":
+                    meta_info["Camera/Device"] = str(value)
+    except Exception:
+        pass
+    return meta_info
+
+def analyze_document(image):
+    # 1. ELA Processing
     temp_filename = "temp_resaved.jpg"
-    rgb_img = image.convert('RGB')
-    rgb_img.save(temp_filename, 'JPEG', quality=90)
+    rgb_img = image.convert("RGB")
+    rgb_img.save(temp_filename, "JPEG", quality=90)
     resaved = Image.open(temp_filename)
-    
+
     diff = ImageChops.difference(rgb_img, resaved)
-    scale = 255.0 / (max([ex[1] for ex in diff.getextrema()]) or 1)
+    extrema = diff.getextrema()
+    max_diff = max([ex[1] for ex in extrema]) if extrema else 1
+    if max_diff == 0:
+        max_diff = 1
+    scale = 255.0 / max_diff
     ela_image = ImageEnhance.Brightness(diff).enhance(scale)
     
-    ela_score = float(np.mean(np.array(diff)) * 4.5)
+    # 2. Tamper Score Calculation
+    diff_arr = np.array(diff)
+    mean_diff = np.mean(diff_arr)
+    tamper_score = min(int((mean_diff / 12.0) * 100), 100)
     
     if os.path.exists(temp_filename):
         os.remove(temp_filename)
+        
+    return ela_image, tamper_score
 
-    fname = filename.lower()
-    # Digital edits, AI tags, or screenshot patterns
-    if any(k in fname for k in ["screen", "edit", "fake", "ai", "gen", "mod"]):
-        final_score = min(max(round(ela_score + 65.0, 2), 74.5), 96.2)
-    else:
-        # Camera / genuine documents
-        final_score = min(round(ela_score, 2), 18.5)
-
-    return ela_image, final_score
-
-uploaded_file = st.file_uploader("Upload Document / Portrait ID", type=["jpg", "jpeg", "png"])
+# File Upload Section
+uploaded_file = st.file_uploader("Upload ID Card / Document (Aadhaar, PAN, Passport)", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    original_image = Image.open(uploaded_file)
+    input_image = Image.open(uploaded_file)
     
     col1, col2 = st.columns(2)
     with col1:
-        st.subheader("📄 Uploaded Document")
-        st.image(original_image, use_container_width=True)
+        st.subheader("Original Document")
+        st.image(input_image, use_container_width=True)
         
-    with st.spinner("Analyzing compression & pixel tampering..."):
-        ela_result, score = analyze_document(original_image, uploaded_file.name)
+    with st.spinner("Analyzing document forensic signatures & metadata..."):
+        ela_result, score = analyze_document(input_image)
+        metadata = extract_metadata(input_image)
         
     with col2:
-        st.subheader("🔍 Forensic Heatmap (ELA)")
+        st.subheader("Forensic Analysis (ELA)")
         st.image(ela_result, use_container_width=True)
-
-    st.markdown("---")
-    st.subheader("📊 Verification Report")
-    
-    m1, m2, m3 = st.columns(3)
-    m1.metric(label="Tamper Probability", value=f"{score}%")
-    
-    if score > 35.0:
-        m2.metric(label="Verdict", value="SUSPICIOUS / FORGED", delta="-High Risk")
-        st.error("⚠️ ALERT: Non-camera synthetic artifacts or edited pixels detected!")
-    else:
-        m2.metric(label="Verdict", value="GENUINE / VERIFIED", delta="Clean")
-        st.success("✅ PASS: Uniform compression layers. Document appears original.")
         
-    m3.metric(label="Latency", value="0.25s")
+    st.markdown("---")
+    st.subheader("📊 Forensic Assessment & Verdict")
+    
+    v_col1, v_col2 = st.columns([1, 2])
+    with v_col1:
+        st.metric(label="Tamper Suspicion Score", value=f"{score}%")
+        
+    with v_col2:
+        # Check if suspicious software is detected in metadata
+        suspicious_keywords = ["photoshop", "gimp", "canva", "picsart", "lightroom"]
+        software_detected = any(k in metadata["Software"].lower() for k in suspicious_keywords)
+        
+        if score > 50 or software_detected:
+            st.error("⚠️ **Verdict: Potential Tampering / Digital Manipulation Detected**")
+            if software_detected:
+                st.warning(f"🚨 **Alert:** Image was processed using photo editing software: `{metadata['Software']}`")
+            st.write("Discrepancies identified in high-frequency compression regions or editing footprints.")
+        else:
+            st.success("✅ **Verdict: Document Appears Authentic**")
+            st.write("Compression artifacts are uniform across all channels with no manipulation signatures.")
+
+    # Display Metadata Section
+    st.markdown("---")
+    st.subheader("🔍 EXIF Metadata & Timestamp Audit")
+    m_col1, m_col2, m_col3 = st.columns(3)
+    with m_col1:
+        st.info(f"**Software / Editor:**\n\n{metadata['Software']}")
+    with m_col2:
+        st.info(f"**Modification Date & Time:**\n\n{metadata['Modified Date/Time']}")
+    with m_col3:
+        st.info(f"**Device / Source:**\n\n{metadata['Camera/Device']}")
