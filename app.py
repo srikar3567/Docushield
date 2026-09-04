@@ -163,9 +163,9 @@ if uploaded_file is not None:
     with m2:
         st.metric(label="Synthetic AI Likelihood (FFT)", value=f"{ai_score}%")
     with m3:
-        if metadata["Is_AI_Tagged"] or ai_score >= 65:
+        if metadata["Is_AI_Tagged"] or ai_score >= 45:
             st.error("🤖 **Verdict: Synthetic / AI Generated**")
-        elif metadata["Is_Edited_Tagged"] or tamper_score > 50:
+        elif metadata["Is_Edited_Tagged"] or tamper_score > 40:
             st.error("⚠️ **Verdict: Spliced / Tampered Document**")
         else:
             st.success("✅ **Verdict: Authentic Document**")
