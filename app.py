@@ -7,6 +7,8 @@ st.set_page_config(page_title="DocuShield - SIH26188", layout="wide")
 
 st.title("🛡️ DocuShield: AI Document Tamper & Fraud Detector")
 st.caption("Smart India Hackathon | Problem Statement: SIH26188")
+st.caption("Developed by: **Srikar** | Dept. of ECE, IIIT Nuzvid")
+st.markdown("---")
 
 def analyze_document(image, filename):
     temp_filename = "temp_resaved.jpg"
