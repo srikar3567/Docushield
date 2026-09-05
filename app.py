@@ -1,3 +1,4 @@
+    
 import streamlit as st
 import numpy as np
 from PIL import Image, ImageChops, ImageEnhance, ImageFilter, ExifTags
@@ -74,22 +75,20 @@ def analyze_fft_with_window(image_pil):
 
 
 def analyze_ai_art_residuals(image_pil):
-    # 1. Edge variance check (tolerant to JPEG/WhatsApp compression)
     edges = image_pil.convert('L').filter(ImageFilter.FIND_EDGES)
     edge_array = np.array(edges, dtype=np.float32)
     noise_variance = np.var(edge_array)
     
-    if noise_variance < 120:
-        smoothness_score = np.clip((120 - noise_variance) * 0.8, 0, 100)
+    if noise_variance < 100:
+        smoothness_score = np.clip((100 - noise_variance) * 0.7, 0, 100)
     else:
         smoothness_score = 0.0
 
-    # 2. Color saturation distribution check
     hsv_img = image_pil.convert('HSV')
     sat_array = np.array(hsv_img)[:, :, 1]
     sat_std = np.std(sat_array)
     
-    saturation_score = np.clip((sat_std - 60) * 1.5, 0, 100)
+    saturation_score = np.clip((sat_std - 65) * 1.5, 0, 100)
 
     ai_art_score = 0.5 * smoothness_score + 0.5 * saturation_score
     return round(float(np.clip(ai_art_score, 0, 100)), 2)
@@ -98,7 +97,7 @@ def analyze_ai_art_residuals(image_pil):
 def get_combined_synthetic_score(image_pil):
     fft_score = analyze_fft_with_window(image_pil)
     art_score = analyze_ai_art_residuals(image_pil)
-    final_score = round(0.6 * fft_score + 0.4 * art_score, 2)
+    final_score = round(0.5 * fft_score + 0.5 * art_score, 2)
     return min(final_score, 100.0)
 
 
@@ -126,9 +125,10 @@ if uploaded_file is not None:
     with col2:
         st.metric(label="Synthetic AI Likelihood", value=f"{int(ai_score)}%")
     
-    if ela_score > 40 or ai_score > 50:
+    # Balanced Thresholds: Normal real photos stay green
+    if ela_score >= 45 or ai_score >= 70:
         st.error("🚨 Verdict: High Suspicion of Tampering / AI Generation")
-    elif ela_score > 25 or ai_score > 35:
+    elif ela_score >= 30 or ai_score >= 55:
         st.warning("⚠️ Verdict: Needs Manual Verification")
     else:
         st.success("✅ Verdict: Authentic Document")
