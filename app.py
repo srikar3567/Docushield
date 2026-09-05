@@ -1,4 +1,4 @@
-import streamlit as st
+    import streamlit as st
 import numpy as np
 from PIL import Image, ImageChops, ImageEnhance, ImageFilter, ExifTags
 import io
@@ -74,28 +74,35 @@ def analyze_fft_with_window(image_pil):
 
 
 def analyze_ai_art_residuals(image_pil):
+    # 1. Edge variance check (tolerant to JPEG/WhatsApp compression)
     edges = image_pil.convert('L').filter(ImageFilter.FIND_EDGES)
     edge_array = np.array(edges, dtype=np.float32)
     noise_variance = np.var(edge_array)
-    smoothness_score = np.clip((350 - noise_variance) / 3.5, 0, 100)
+    
+    if noise_variance < 120:
+        smoothness_score = np.clip((120 - noise_variance) * 0.8, 0, 100)
+    else:
+        smoothness_score = 0.0
 
+    # 2. Color saturation distribution check
     hsv_img = image_pil.convert('HSV')
     sat_array = np.array(hsv_img)[:, :, 1]
     sat_std = np.std(sat_array)
-    saturation_score = np.clip((sat_std - 45) * 2, 0, 100)
+    
+    saturation_score = np.clip((sat_std - 60) * 1.5, 0, 100)
 
-    ai_art_score = 0.6 * smoothness_score + 0.4 * saturation_score
+    ai_art_score = 0.5 * smoothness_score + 0.5 * saturation_score
     return round(float(np.clip(ai_art_score, 0, 100)), 2)
 
 
 def get_combined_synthetic_score(image_pil):
     fft_score = analyze_fft_with_window(image_pil)
     art_score = analyze_ai_art_residuals(image_pil)
-    final_score = round(max(fft_score, art_score) * 0.7 + (fft_score + art_score) * 0.15, 2)
+    final_score = round(0.6 * fft_score + 0.4 * art_score, 2)
     return min(final_score, 100.0)
 
 
-# --- Streamlit UI ---
+# --- Streamlit UI Execution ---
 
 uploaded_file = st.file_uploader("Upload Image", type=["jpg", "jpeg", "png"])
 
