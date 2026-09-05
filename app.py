@@ -12,9 +12,6 @@ st.write("Upload an identity document or image to evaluate tampering and synthet
 # --- Metadata Audit ---
 
 def extract_metadata_datetime(image_pil):
-    """
-    Extracts original capture date and time from EXIF metadata.
-    """
     try:
         exif = image_pil._getexif()
         if exif:
@@ -99,7 +96,7 @@ def get_combined_synthetic_score(image_pil):
     return min(final_score, 100.0)
 
 
-# --- Streamlit Dashboard Execution ---
+# --- Streamlit UI ---
 
 uploaded_file = st.file_uploader("Upload Image", type=["jpg", "jpeg", "png"])
 
@@ -107,11 +104,9 @@ if uploaded_file is not None:
     image = Image.open(uploaded_file)
     st.image(image, caption="Uploaded Image", use_container_width=True)
     
-    # Metadata Audit Display
     timestamp = extract_metadata_datetime(image)
     st.info(f"🕒 **Metadata Timestamp:** {timestamp}")
 
-    # Forensic Processing
     ela_img, ela_score = perform_ela(image)
     ai_score = get_combined_synthetic_score(image)
     
