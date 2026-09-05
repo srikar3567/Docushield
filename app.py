@@ -1,6 +1,6 @@
 import streamlit as st
 import numpy as np
-from PIL import Image, ImageChops, ImageEnhance, ImageFilter
+from PIL import Image, ImageChops, ImageEnhance, ImageFilter, ExifTags
 import io
 
 st.set_page_config(page_title="DocuShield - Document Tamper Detection", layout="centered")
@@ -8,12 +8,27 @@ st.set_page_config(page_title="DocuShield - Document Tamper Detection", layout="
 st.title("🛡️ DocuShield: Multi-Modal Document Screener")
 st.write("Upload an identity document or image to evaluate tampering and synthetic AI patterns.")
 
-# --- Forensic Algorithms (Pure NumPy & PIL - No cv2 required) ---
+# --- Metadata Audit ---
+
+def extract_metadata_datetime(image_pil):
+    """
+    Extracts original capture date and time from EXIF metadata.
+    """
+    try:
+        exif = image_pil._getexif()
+        if exif:
+            for tag_id, value in exif.items():
+                tag_name = ExifTags.TAGS.get(tag_id, tag_id)
+                if tag_name in ['DateTimeOriginal', 'DateTime']:
+                    return str(value)
+    except Exception:
+        pass
+    return "No EXIF Timestamp Found (Stripped/Digital Export)"
+
+
+# --- Forensic Algorithms ---
 
 def perform_ela(image_pil, quality=90):
-    """
-    Computes Error Level Analysis (ELA) to highlight pixel-level compression anomalies.
-    """
     buffer = io.BytesIO()
     image_pil.convert('RGB').save(buffer, 'JPEG', quality=quality)
     buffer.seek(0)
@@ -33,9 +48,6 @@ def perform_ela(image_pil, quality=90):
 
 
 def analyze_fft_with_window(image_pil):
-    """
-    Applies a 2D Hanning window before FFT to eliminate sharp crop edge artifacts.
-    """
     img_gray = np.array(image_pil.convert('L'), dtype=np.float32)
     h, w = img_gray.shape
     
@@ -65,16 +77,11 @@ def analyze_fft_with_window(image_pil):
 
 
 def analyze_ai_art_residuals(image_pil):
-    """
-    Detects smooth latent patterns and saturation anomalies using PIL/NumPy.
-    """
-    # High-pass filter via PIL edge enhance to detect stroke noise variance
     edges = image_pil.convert('L').filter(ImageFilter.FIND_EDGES)
     edge_array = np.array(edges, dtype=np.float32)
     noise_variance = np.var(edge_array)
     smoothness_score = np.clip((350 - noise_variance) / 3.5, 0, 100)
 
-    # Color saturation distribution check via HSV
     hsv_img = image_pil.convert('HSV')
     sat_array = np.array(hsv_img)[:, :, 1]
     sat_std = np.std(sat_array)
@@ -85,9 +92,6 @@ def analyze_ai_art_residuals(image_pil):
 
 
 def get_combined_synthetic_score(image_pil):
-    """
-    Combines stabilized FFT with AI art noise residuals.
-    """
     fft_score = analyze_fft_with_window(image_pil)
     art_score = analyze_ai_art_residuals(image_pil)
     final_score = round(max(fft_score, art_score) * 0.7 + (fft_score + art_score) * 0.15, 2)
@@ -102,6 +106,11 @@ if uploaded_file is not None:
     image = Image.open(uploaded_file)
     st.image(image, caption="Uploaded Image", use_container_width=True)
     
+    # Metadata Audit Display
+    timestamp = extract_metadata_datetime(image)
+    st.info(f"🕒 **Metadata Timestamp:** {timestamp}")
+
+    # Forensic Processing
     ela_img, ela_score = perform_ela(image)
     ai_score = get_combined_synthetic_score(image)
     
