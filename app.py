@@ -1,7 +1,6 @@
 import streamlit as st
-import cv2
 import numpy as np
-from PIL import Image, ImageChops, ImageEnhance
+from PIL import Image, ImageChops, ImageEnhance, ImageFilter
 import io
 
 st.set_page_config(page_title="DocuShield - Document Tamper Detection", layout="centered")
@@ -9,7 +8,7 @@ st.set_page_config(page_title="DocuShield - Document Tamper Detection", layout="
 st.title("🛡️ DocuShield: Multi-Modal Document Screener")
 st.write("Upload an identity document or image to evaluate tampering and synthetic AI patterns.")
 
-# --- Forensic Algorithms ---
+# --- Forensic Algorithms (Pure NumPy & PIL - No cv2 required) ---
 
 def perform_ela(image_pil, quality=90):
     """
@@ -20,7 +19,6 @@ def perform_ela(image_pil, quality=90):
     buffer.seek(0)
     resaved_image = Image.open(buffer)
     
-    # Pixel difference
     ela_image = ImageChops.difference(image_pil.convert('RGB'), resaved_image)
     extrema = ela_image.getextrema()
     max_diff = max([ex[1] for ex in extrema])
@@ -29,7 +27,6 @@ def perform_ela(image_pil, quality=90):
     scale = 255.0 / max_diff
     ela_image = ImageEnhance.Brightness(ela_image).enhance(scale)
     
-    # Compute suspicion percentage based on mean difference intensity
     ela_array = np.array(ela_image)
     tamper_score = np.clip((np.mean(ela_array) / 255.0) * 200, 0, 100)
     return ela_image, round(float(tamper_score), 2)
@@ -69,17 +66,18 @@ def analyze_fft_with_window(image_pil):
 
 def analyze_ai_art_residuals(image_pil):
     """
-    Detects smooth latent patterns and unnatural saturation typical in AI anime/art.
+    Detects smooth latent patterns and saturation anomalies using PIL/NumPy.
     """
-    img_rgb = np.array(image_pil.convert('RGB'))
-    
-    gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
-    laplacian = cv2.Laplacian(gray, cv2.CV_64F)
-    noise_variance = laplacian.var()
-    smoothness_score = np.clip((250 - noise_variance) / 2.5, 0, 100)
+    # High-pass filter via PIL edge enhance to detect stroke noise variance
+    edges = image_pil.convert('L').filter(ImageFilter.FIND_EDGES)
+    edge_array = np.array(edges, dtype=np.float32)
+    noise_variance = np.var(edge_array)
+    smoothness_score = np.clip((350 - noise_variance) / 3.5, 0, 100)
 
-    hsv = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2HSV)
-    sat_std = np.std(hsv[:, :, 1])
+    # Color saturation distribution check via HSV
+    hsv_img = image_pil.convert('HSV')
+    sat_array = np.array(hsv_img)[:, :, 1]
+    sat_std = np.std(sat_array)
     saturation_score = np.clip((sat_std - 45) * 2, 0, 100)
 
     ai_art_score = 0.6 * smoothness_score + 0.4 * saturation_score
@@ -104,7 +102,6 @@ if uploaded_file is not None:
     image = Image.open(uploaded_file)
     st.image(image, caption="Uploaded Image", use_container_width=True)
     
-    # Forensic Processing
     ela_img, ela_score = perform_ela(image)
     ai_score = get_combined_synthetic_score(image)
     
@@ -118,11 +115,10 @@ if uploaded_file is not None:
     with col2:
         st.metric(label="Synthetic AI Likelihood", value=f"{int(ai_score)}%")
     
-    # Final Verdict Decision Logic
     if ela_score > 40 or ai_score > 50:
         st.error("🚨 Verdict: High Suspicion of Tampering / AI Generation")
     elif ela_score > 25 or ai_score > 35:
         st.warning("⚠️ Verdict: Needs Manual Verification")
     else:
         st.success("✅ Verdict: Authentic Document")
-    
+        
