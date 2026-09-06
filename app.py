@@ -1,4 +1,3 @@
-    
 import streamlit as st
 import numpy as np
 from PIL import Image, ImageChops, ImageEnhance, ImageFilter, ExifTags
@@ -70,35 +69,49 @@ def analyze_fft_with_window(image_pil):
     total_energy = np.mean(magnitude_spectrum)
 
     ratio = high_freq_energy / (total_energy + 1e-5)
-    normalized_score = np.clip((ratio - 0.7) * 200, 0, 100)
+    normalized_score = np.clip((ratio - 0.55) * 220, 0, 100)
     return round(float(normalized_score), 2)
 
 
 def analyze_ai_art_residuals(image_pil):
-    edges = image_pil.convert('L').filter(ImageFilter.FIND_EDGES)
-    edge_array = np.array(edges, dtype=np.float32)
-    noise_variance = np.var(edge_array)
-    
-    if noise_variance < 100:
-        smoothness_score = np.clip((100 - noise_variance) * 0.7, 0, 100)
-    else:
-        smoothness_score = 0.0
+    """
+    Detects AI anime/illustration synthetic characteristics:
+    1. Color quantization and hyper-vivid palette variance
+    2. Lack of natural optical sensor noise in smooth regions
+    """
+    rgb_img = image_pil.convert('RGB')
+    arr = np.array(rgb_img, dtype=np.float32)
 
+    # 1. Color Palette Purity (AI art exhibits exaggerated channel divergence)
+    std_r, std_g, std_b = np.std(arr[:, :, 0]), np.std(arr[:, :, 1]), np.std(arr[:, :, 2])
+    color_vibrancy = (std_r + std_g + std_b) / 3.0
+    vibrancy_score = np.clip((color_vibrancy - 48) * 1.8, 0, 100)
+
+    # 2. Local gradient smoothness (AI renders skin/background with zero micro-grain)
+    gray = image_pil.convert('L')
+    blur = gray.filter(ImageFilter.GaussianBlur(radius=1.5))
+    residual_noise = np.abs(np.array(gray, dtype=np.float32) - np.array(blur, dtype=np.float32))
+    noise_level = np.mean(residual_noise)
+    
+    # Real camera images maintain high residual sensor noise (> 4.5); AI anime is ultra-clean (< 3.0)
+    smooth_score = np.clip((4.2 - noise_level) * 30.0, 0, 100)
+
+    # 3. Saturation distribution
     hsv_img = image_pil.convert('HSV')
-    sat_array = np.array(hsv_img)[:, :, 1]
-    sat_std = np.std(sat_array)
-    
-    saturation_score = np.clip((sat_std - 65) * 1.5, 0, 100)
+    sat_mean = np.mean(np.array(hsv_img)[:, :, 1])
+    sat_score = np.clip((sat_mean - 40) * 1.5, 0, 100)
 
-    ai_art_score = 0.5 * smoothness_score + 0.5 * saturation_score
-    return round(float(np.clip(ai_art_score, 0, 100)), 2)
+    ai_score = (0.4 * smooth_score) + (0.35 * vibrancy_score) + (0.25 * sat_score)
+    return round(float(np.clip(ai_score, 0, 100)), 2)
 
 
 def get_combined_synthetic_score(image_pil):
     fft_score = analyze_fft_with_window(image_pil)
     art_score = analyze_ai_art_residuals(image_pil)
-    final_score = round(0.5 * fft_score + 0.5 * art_score, 2)
-    return min(final_score, 100.0)
+    
+    # Prioritizes whichever detector strongly flags synthetic structure
+    final_score = max(art_score, fft_score * 0.75 + art_score * 0.25)
+    return round(min(final_score, 100.0), 2)
 
 
 # --- Streamlit UI Execution ---
@@ -125,11 +138,12 @@ if uploaded_file is not None:
     with col2:
         st.metric(label="Synthetic AI Likelihood", value=f"{int(ai_score)}%")
     
-    # Balanced Thresholds: Normal real photos stay green
-    if ela_score >= 45 or ai_score >= 70:
+    # Verdict logic
+    if ela_score >= 40 or ai_score >= 65:
         st.error("🚨 Verdict: High Suspicion of Tampering / AI Generation")
-    elif ela_score >= 30 or ai_score >= 55:
+    elif ela_score >= 25 or ai_score >= 50:
         st.warning("⚠️ Verdict: Needs Manual Verification")
     else:
         st.success("✅ Verdict: Authentic Document")
+    
         
