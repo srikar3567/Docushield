@@ -253,6 +253,4 @@ if uploaded_file is not None:
                 st.markdown(f"- :red[{f}]")
         else:
             st.write("- :green[All structural checks matched standard schemas.]")
-            
-    
-    
+        
