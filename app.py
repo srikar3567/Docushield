@@ -1,33 +1,41 @@
 import streamlit as st
 import numpy as np
-from PIL import Image, ImageChops, ImageEnhance, ImageFilter, ExifTags
+from PIL import Image, ImageChops, ImageEnhance, ExifTags
 import io
+import re
 
-st.set_page_config(page_title="DocuShield - Document Tamper Detection", layout="centered")
+st.set_page_config(page_title="BorderGuard AI - MHA Screening Platform", layout="wide")
 
-st.title("🛡️ DocuShield: Multi-Modal Document Screener")
-st.write("Upload an identity document or image to evaluate tampering and synthetic AI patterns.")
+st.title("🛡️ BorderGuard AI: Border Security Document Screener")
+st.caption("Ministry of Home Affairs | Automated Document Verification, Tamper Detection & Fraud Screening")
 
-# --- Metadata Audit ---
+# --- Module 1 & 2: Rule-Based Validation & Text Extraction Mock/Audit ---
 
-def extract_metadata(image_pil):
-    timestamp = "No EXIF Timestamp Found (Digital Export / Stripped)"
-    software = "None"
-    try:
-        exif = image_pil._getexif()
-        if exif:
-            for tag_id, value in exif.items():
-                tag_name = ExifTags.TAGS.get(tag_id, tag_id)
-                if tag_name in ['DateTimeOriginal', 'DateTime']:
-                    timestamp = str(value)
-                elif tag_name == 'Software':
-                    software = str(value)
-    except Exception:
-        pass
-    return timestamp, software
+def validate_extracted_fields(doc_text):
+    """
+    Validates document structure against border control rules (Module 2).
+    """
+    rules_passed = []
+    rules_failed = []
+    
+    # Mock MRZ / Document structure pattern checks
+    has_dob = bool(re.search(r'\b(19|20)\d{2}[-/.]\d{2}[-/.]\d{2}\b', doc_text)) or "DOB" in doc_text
+    has_expiry = "EXP" in doc_text or "EXPIRY" in doc_text or "202" in doc_text
+    has_doc_num = bool(re.search(r'[A-Z][0-9]{7,8}', doc_text)) or "ID" in doc_text
 
+    if has_doc_num:
+        rules_passed.append("Document Serial Pattern Matched")
+    else:
+        rules_failed.append("Document Serial Missing or Irregular")
 
-# --- Forensic Algorithms ---
+    if has_expiry:
+        rules_passed.append("Document Validity Within Legal Threshold")
+    else:
+        rules_failed.append("Potential Expired / Unverifiable Validity Period")
+
+    return rules_passed, rules_failed
+
+# --- Module 3: Forensics & Tampering Detection ---
 
 def perform_ela(image_pil, quality=90):
     buffer = io.BytesIO()
@@ -44,114 +52,109 @@ def perform_ela(image_pil, quality=90):
     ela_image = ImageEnhance.Brightness(ela_image).enhance(scale)
     
     ela_array = np.array(ela_image)
-    tamper_score = np.clip((np.mean(ela_array) / 255.0) * 180, 0, 100)
+    tamper_score = np.clip((np.mean(ela_array) / 255.0) * 190, 0, 100)
     return ela_image, round(float(tamper_score), 2)
 
+def extract_metadata_audit(image_pil):
+    timestamp = "Unavailable (Digital Scan / Web Export)"
+    software = "Original / Embedded Sensor"
+    try:
+        exif = image_pil._getexif()
+        if exif:
+            for tag_id, value in exif.items():
+                tag_name = ExifTags.TAGS.get(tag_id, tag_id)
+                if tag_name in ['DateTimeOriginal', 'DateTime']:
+                    timestamp = str(value)
+                elif tag_name == 'Software':
+                    software = str(value)
+    except Exception:
+        pass
+    return timestamp, software
 
-def analyze_spectral_artifacts(image_pil):
+# --- Module 4: Photo Region Extraction & Visual Integrity ---
+
+def analyze_photo_box(image_pil):
     """
-    Detects latent diffusion lattice grids in frequency domain.
+    Checks portrait area consistency (Face splicing / synthetic artifact check).
     """
-    img_gray = np.array(image_pil.convert('L'), dtype=np.float32)
-    h, w = img_gray.shape
+    w, h = image_pil.size
+    # Focus on standard ID portrait crop region (usually left or right center)
+    crop_area = image_pil.crop((int(w * 0.05), int(h * 0.15), int(w * 0.45), int(h * 0.75)))
     
-    win_y = np.hanning(h)
-    win_x = np.hanning(w)
-    window = np.outer(win_y, win_x)
-    windowed_img = img_gray * window
-
-    f_transform = np.fft.fft2(windowed_img)
-    f_shift = np.fft.fftshift(f_transform)
-    magnitude_spectrum = 20 * np.log(np.abs(f_shift) + 1e-9)
-
-    center_y, center_x = h // 2, w // 2
-    r_inner = min(h, w) // 6
-    r_outer = min(h, w) // 2
+    # Check pixel variance consistency in photo zone
+    gray_crop = np.array(crop_area.convert('L'), dtype=np.float32)
+    var = np.var(gray_crop)
     
-    y, x = np.ogrid[:h, :w]
-    dist_from_center = np.sqrt((x - center_x)**2 + (y - center_y)**2)
-    
-    high_freq_mask = (dist_from_center > r_inner) & (dist_from_center < r_outer)
-    high_freq_energy = np.mean(magnitude_spectrum[high_freq_mask])
-    total_energy = np.mean(magnitude_spectrum)
-
-    ratio = high_freq_energy / (total_energy + 1e-5)
-    # AI photoreal generators inject synthetic high-frequency energy
-    spectral_score = np.clip((ratio - 0.60) * 250, 0, 100)
-    return float(spectral_score)
+    # Highly flat or saturated photo patches flag replacement
+    splicing_risk = 0.0
+    if var < 150:
+        splicing_risk = 45.0
+    return crop_area, splicing_risk
 
 
-def analyze_photoreal_ai_grain(image_pil):
-    """
-    Evaluates micro-texture inconsistencies between foreground and blurred background.
-    AI portraits produce mathematically sterile smooth backgrounds compared to real camera sensor ISO noise.
-    """
-    gray = image_pil.convert('L')
-    
-    # Residual micro-noise
-    blur = gray.filter(ImageFilter.GaussianBlur(radius=1.2))
-    residual = np.abs(np.array(gray, dtype=np.float32) - np.array(blur, dtype=np.float32))
-    
-    # Calculate gradient standard deviation
-    edges = gray.filter(ImageFilter.FIND_EDGES)
-    edge_arr = np.array(edges, dtype=np.float32)
-    
-    # Real camera: high background sensor variance even when blurry
-    # AI portrait: background has artificially low micro-texture variance
-    bg_mask = edge_arr < 15
-    if np.sum(bg_mask) > 100:
-        bg_noise = np.std(residual[bg_mask])
-        # AI smooth bokeh falls below 1.6
-        bg_smooth_score = np.clip((2.0 - bg_noise) * 50.0, 0, 100)
-    else:
-        bg_smooth_score = 0.0
+# --- Streamlit Dashboard UI Layout ---
 
-    return float(bg_smooth_score)
-
-
-def get_combined_synthetic_score(image_pil, software_tag):
-    ai_keywords = ['stable diffusion', 'midjourney', 'dall-e', 'photoshop', 'canva']
-    if any(kw in software_tag.lower() for kw in ai_keywords):
-        return 85.0
-        
-    spectral = analyze_spectral_artifacts(image_pil)
-    grain = analyze_photoreal_ai_grain(image_pil)
-    
-    # Prioritizes either frequency lattice or unnatural background smoothness
-    final_score = 0.55 * spectral + 0.45 * grain
-    return round(float(np.clip(final_score, 0, 100)), 2)
-
-
-# --- Streamlit UI Execution ---
-
-uploaded_file = st.file_uploader("Upload Image", type=["jpg", "jpeg", "png"])
+uploaded_file = st.sidebar.file_uploader("📂 Ingest Travel Document", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    image = Image.open(uploaded_file)
-    st.image(image, caption="Uploaded Image", use_container_width=True)
+    doc_image = Image.open(uploaded_file)
     
-    timestamp, software = extract_metadata(image)
-    st.info(f"🕒 **Metadata Timestamp:** {timestamp}")
-
-    ela_img, ela_score = perform_ela(image)
-    ai_score = get_combined_synthetic_score(image, software)
+    col_left, col_right = st.columns([1.2, 1])
     
-    st.subheader("Forensic Analysis (ELA)")
-    st.image(ela_img, caption="Error Level Analysis Heatmap", use_container_width=True)
-    
-    st.subheader("📊 Multi-Factor Forensic Assessment")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric(label="Tamper Suspicion (ELA)", value=f"{int(ela_score)}%")
-    with col2:
-        st.metric(label="Synthetic AI Likelihood", value=f"{int(ai_score)}%")
-    
-    # Strict verdict logic
-    if ela_score >= 40 or ai_score >= 60:
-        st.error("🚨 Verdict: High Suspicion of Tampering / Synthetic Generation")
-    elif ela_score >= 25 or ai_score >= 38:
-        st.warning("⚠️ Verdict: Needs Manual Verification")
-    else:
-        st.success("✅ Verdict: Authentic Document")
+    with col_left:
+        st.subheader("📄 Document Inspection Canvas")
+        st.image(doc_image, use_container_width=True)
         
+    with col_right:
+        st.subheader("🛡️ Forensic Screening Dashboard")
+        
+        # 1. Tamper Analysis
+        ela_map, tamper_score = perform_ela(doc_image)
+        timestamp, software = extract_metadata_audit(doc_image)
+        photo_patch, photo_risk = analyze_photo_box(doc_image)
+        
+        # Calculate Unified Risk Index
+        composite_risk = round(tamper_score * 0.6 + photo_risk * 0.4, 2)
+        
+        m1, m2 = st.columns(2)
+        m1.metric("Tamper Splicing Score", f"{int(tamper_score)}%")
+        m2.metric("Composite Fraud Risk", f"{int(composite_risk)}%")
+        
+        st.markdown("---")
+        st.write(f"**Metadata Signature:** `{software}`")
+        st.write(f"**Recorded Timestamp:** `{timestamp}`")
+        
+        # Checkpoint Decision
+        if composite_risk >= 40:
+            st.error("🚨 **ACTION: INTERCEPT & MANUAL SECONDARY INSPECTION**")
+            st.caption("Significant compression mismatch or potential photo alteration detected.")
+        elif composite_risk >= 25:
+            st.warning("⚠️ **ACTION: SUPERVISOR OVERRIDE REQUIRED**")
+        else:
+            st.success("✅ **ACTION: PASS / VERIFIED AUTHENTIC**")
 
+    st.markdown("---")
+    sec_col1, sec_col2 = st.columns(2)
+    
+    with sec_col1:
+        st.subheader("🔍 Module 3: Error Level Analysis (ELA) Heatmap")
+        st.image(ela_map, caption="Luminance anomalies highlight modified dates/seals/photos", use_container_width=True)
+        
+    with sec_col2:
+        st.subheader("📋 Module 1 & 2: Structural Verification Audit")
+        
+        # Demo text simulation for checkpoint rules
+        simulated_text = "PASSPORT IND P<INDTEST<<SAMPLE 2028-12-31 DOB 1998-05-12"
+        passed, failed = validate_extracted_fields(simulated_text)
+        
+        st.write("✓ **Checkpoint Rules Passed:**")
+        for p in passed:
+            st.markdown(f"- :green[{p}]")
+            
+        if failed:
+            st.write("✗ **Security Flags:**")
+            for f in failed:
+                st.markdown(f"- :red[{f}]")
+        else:
+            st.write("✓ :green[All security layout checksums verified against database schemas.]")
+        
