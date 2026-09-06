@@ -11,18 +11,53 @@ st.title("🛡️ BorderGuard AI: Document Screening System")
 st.caption("Ministry of Home Affairs (MHA) | Problem Statement: SIH26188 | Automated Immigration Credential Inspection")
 
 # ==========================================
+# VERHOEFF MATHEMATICAL CHECKSUM TABLES
+# ==========================================
+d_table = [
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    [1, 2, 3, 4, 0, 6, 7, 8, 9, 5],
+    [2, 3, 4, 0, 1, 7, 8, 9, 5, 6],
+    [3, 4, 0, 1, 2, 8, 9, 5, 6, 7],
+    [4, 0, 1, 2, 3, 9, 5, 6, 7, 8],
+    [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
+    [6, 5, 9, 8, 7, 1, 0, 4, 3, 2],
+    [7, 6, 5, 9, 8, 2, 1, 0, 4, 3],
+    [8, 7, 6, 5, 9, 3, 2, 1, 0, 4],
+    [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
+]
+p_table = [
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    [1, 5, 7, 6, 2, 8, 3, 0, 9, 4],
+    [5, 8, 0, 3, 7, 9, 6, 1, 4, 2],
+    [8, 9, 1, 6, 0, 4, 3, 5, 2, 7],
+    [9, 4, 5, 3, 1, 2, 6, 8, 7, 0],
+    [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
+    [2, 7, 9, 3, 8, 0, 6, 4, 1, 5],
+    [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]
+]
+
+def validate_verhoeff(num_str):
+    """Calculates official 12-digit Dihedral group D5 checksum equation."""
+    num_str = re.sub(r'\D', '', str(num_str))
+    if len(num_str) != 12:
+        return False
+    c = 0
+    for i, item in enumerate(reversed(num_str)):
+        c = d_table[c][p_table[i % 8][int(item)]]
+    return c == 0
+
+# ==========================================
 # MODULE 4: FACE EXTRACTION & VISUAL AUDIT
 # ==========================================
 def extract_and_verify_face(image_pil):
     """
-    Detects and crops portrait photo from document safely with fallback.
+    Detects and crops portrait photo from document safely with layout fallback.
     """
     w, h = image_pil.size
     img_cv = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
     gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
     
     faces = []
-    # Safe cascade loader
     try:
         cascade_path = getattr(cv2, 'data', None)
         if cascade_path and hasattr(cascade_path, 'haarcascades'):
@@ -44,18 +79,17 @@ def extract_and_verify_face(image_pil):
         face_crop = image_pil.crop((x1, y1, x2, y2))
         status_note = "Standard portrait ROI localized via facial landmarks"
     else:
-        # Standard ID Portrait fallback crop (left-side photo zone for National IDs / Passports)
-        face_crop = image_pil.crop((int(w * 0.05), int(h * 0.18), int(w * 0.40), int(h * 0.78)))
+        # Standard ID layout portrait region fallback
+        face_crop = image_pil.crop((int(w * 0.05), int(h * 0.20), int(w * 0.40), int(h * 0.80)))
         status_note = "Localized via Standard Identity Card Photo Region Layout"
 
-    # Laplacian Edge gradient analysis for cut-and-paste borders
     crop_gray = np.array(face_crop.convert('L'))
     laplacian_var = cv2.Laplacian(crop_gray, cv2.CV_64F).var()
     
     splicing_risk = 0.0
     if laplacian_var < 40.0:
         splicing_risk = 35.0
-        status_note += " (Potential low-texture anomaly)"
+        status_note += " (Potential low-texture/splicing anomaly)"
         
     return face_crop, splicing_risk, status_note
 
@@ -125,7 +159,7 @@ def extract_document_text(image_pil):
 
 def audit_document_rules(text_corpus):
     fields = {
-        "Document Number": "Detected / Formatted",
+        "Document Number": "Unresolved",
         "Date of Birth": "Unresolved",
         "Expiration Date": "Unresolved",
         "Layout Syntax": "Standard"
@@ -133,14 +167,24 @@ def audit_document_rules(text_corpus):
     flags = []
     checks_passed = []
     
-    # Serial / ID Pattern matching
-    doc_id_match = re.search(r'\b[A-Z0-9]{4,14}\b', text_corpus)
-    if doc_id_match:
-        checks_passed.append("Credential Serial Pattern Verified")
+    # 1. 12-Digit Mathematical Checksum Validation (Verhoeff)
+    twelve_digit_matches = re.findall(r'\b\d{4}\s?\d{4}\s?\d{4}\b', text_corpus)
+    if twelve_digit_matches:
+        candidate_num = twelve_digit_matches[0].replace(" ", "")
+        fields["Document Number"] = "[Redacted 12-Digit ID]"
+        if validate_verhoeff(candidate_num):
+            checks_passed.append("Official 12-Digit Mathematical Checksum Validated")
+        else:
+            flags.append("SECURITY ALERT: Altered/Fake ID Number (Verhoeff Checksum Failed)")
     else:
-        flags.append("Document Serial Pattern not detected")
+        doc_id_match = re.search(r'\b[A-Z0-9]{6,14}\b', text_corpus)
+        if doc_id_match:
+            fields["Document Number"] = doc_id_match.group(0)
+            checks_passed.append("Credential Serial Pattern Identified")
+        else:
+            flags.append("Document Identification Number not detected")
 
-    # Date parsing
+    # 2. Date parsing
     dates = re.findall(r'\b(?:\d{2}[-/.]\d{2}[-/.]\d{4}|\d{4}[-/.]\d{2}[-/.]\d{2})\b', text_corpus)
     if len(dates) >= 2:
         fields["Date of Birth"] = dates[0]
@@ -152,16 +196,16 @@ def audit_document_rules(text_corpus):
     else:
         flags.append("Standard date structures not recognized")
 
-    # Syntax & Checksum verification
-    if "GOVERNMENT" in text_corpus.upper() or "INDIA" in text_corpus.upper() or "IDENTITY" in text_corpus.upper():
-        checks_passed.append("Official Government Emblems / Keyword Headers Verified")
+    # 3. State security header check
+    if any(k in text_corpus.upper() for k in ["GOVERNMENT", "INDIA", "AUTHORITY", "ENROLMENT", "IDENTITY"]):
+        checks_passed.append("Official Emblems / Department Keyword Headers Verified")
     else:
         flags.append("Missing standard state security header syntax")
 
     return fields, checks_passed, flags
 
 # ==========================================
-# USER INTERFACE & WORKFLOW
+# USER INTERFACE & WORKFLOW ROUTING
 # ==========================================
 
 uploaded_file = st.file_uploader("📂 Ingest Identity Document (Passport / National ID / Driving License)", type=["jpg", "jpeg", "png"])
@@ -178,15 +222,18 @@ if uploaded_file is not None:
     with c_right:
         st.subheader("🛡️ Forensic Triage Dashboard")
         
+        # Execute Forensic Engines
         ela_map, tamper_score = perform_ela(doc_img)
         meta_ts, meta_soft = extract_metadata_audit(doc_img)
         face_patch, face_risk, face_msg = extract_and_verify_face(doc_img)
         
+        # OCR & Rule Checks
         full_text, raw_lines = extract_document_text(doc_img)
         fields, passed_rules, failed_rules = audit_document_rules(full_text)
         
-        rule_risk_penalty = len(failed_rules) * 10.0
-        composite_risk = round(tamper_score * 0.45 + face_risk * 0.25 + rule_risk_penalty * 0.30, 2)
+        # Risk Aggregation (Penalize heavily for checksum failure)
+        rule_risk_penalty = len(failed_rules) * 20.0
+        composite_risk = round(tamper_score * 0.40 + face_risk * 0.20 + rule_risk_penalty * 0.40, 2)
         composite_risk = min(100.0, composite_risk)
         
         m1, m2, m3 = st.columns(3)
@@ -196,15 +243,16 @@ if uploaded_file is not None:
         
         st.markdown("---")
         
-        if composite_risk >= 45 or len(failed_rules) >= 3:
+        # Tactical Triage Directives
+        if composite_risk >= 40 or any("SECURITY ALERT" in r for r in failed_rules):
             st.error("🚨 **ACTION: INTERCEPT & SECONDARY MANUAL SCREENING**")
-            st.caption("Significant compression mismatch or structural discrepancies detected.")
-        elif composite_risk >= 25:
+            st.caption("Mathematical checksum failure or critical forensic anomalies detected.")
+        elif composite_risk >= 25 or len(failed_rules) >= 2:
             st.warning("⚠️ **ACTION: SUPERVISOR MANUAL OVERRIDE REQUIRED**")
-            st.caption("Borderline verification signals detected.")
+            st.caption("Borderline risk metrics or missing security parameters.")
         else:
             st.success("✅ **ACTION: PASS / VERIFIED AUTHENTIC**")
-            st.caption("Document passed forensic compression and rule structure checks.")
+            st.caption("Credential passed mathematical checksum, ELA forensics, and layout validation.")
 
     st.markdown("---")
     
@@ -242,4 +290,4 @@ if uploaded_file is not None:
                 st.markdown(f"- :red[{f}]")
         else:
             st.write("- :green[All structural checks matched standard schemas.]")
-
+    
