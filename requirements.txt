@@ -1,5 +1,5 @@
 streamlit
-PyMuPDF
-cryptography
+numpy
 Pillow
-reportlab
+opencv-python-headless
+easyocr
