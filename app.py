@@ -1,9 +1,9 @@
 import streamlit as st
 import numpy as np
 from PIL import Image, ImageChops, ImageEnhance, ExifTags
-import cv2
 import io
 import re
+import pytesseract
 
 st.set_page_config(page_title="BorderGuard AI - MHA Screening Platform", layout="wide")
 
@@ -11,7 +11,7 @@ st.title("🛡️ BorderGuard AI: Document Screening System")
 st.caption("Ministry of Home Affairs (MHA) | Problem Statement: SIH26188 | Automated Immigration Credential Inspection")
 
 # ==========================================
-# VERHOEFF MATHEMATICAL CHECKSUM TABLES
+# VERHOEFF MATHEMATICAL CHECKSUM ENGINE
 # ==========================================
 d_table = [
     [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
@@ -47,49 +47,23 @@ def validate_verhoeff(num_str):
     return c == 0
 
 # ==========================================
-# MODULE 4: FACE EXTRACTION & VISUAL AUDIT
+# MODULE 4: FACE ROI LOCALIZATION
 # ==========================================
 def extract_and_verify_face(image_pil):
-    """
-    Detects and crops portrait photo from document safely with layout fallback.
-    """
     w, h = image_pil.size
-    img_cv = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
-    gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+    box = (int(w * 0.04), int(h * 0.18), int(w * 0.42), int(h * 0.82))
+    face_crop = image_pil.crop(box)
     
-    faces = []
-    try:
-        cascade_path = getattr(cv2, 'data', None)
-        if cascade_path and hasattr(cascade_path, 'haarcascades'):
-            xml_file = cascade_path.haarcascades + 'haarcascade_frontalface_default.xml'
-            face_cascade = cv2.CascadeClassifier(xml_file)
-            if not face_cascade.empty():
-                faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(50, 50))
-    except Exception:
-        faces = []
-
-    if len(faces) > 0:
-        x, y, fw, fh = max(faces, key=lambda b: b[2] * b[3])
-        pad_y = int(fh * 0.15)
-        pad_x = int(fw * 0.15)
-        y1 = max(0, y - pad_y)
-        y2 = min(h, y + fh + pad_y)
-        x1 = max(0, x - pad_x)
-        x2 = min(w, x + fw + pad_x)
-        face_crop = image_pil.crop((x1, y1, x2, y2))
-        status_note = "Standard portrait ROI localized via facial landmarks"
-    else:
-        # Standard ID layout portrait region fallback
-        face_crop = image_pil.crop((int(w * 0.05), int(h * 0.20), int(w * 0.40), int(h * 0.80)))
-        status_note = "Localized via Standard Identity Card Photo Region Layout"
-
-    crop_gray = np.array(face_crop.convert('L'))
-    laplacian_var = cv2.Laplacian(crop_gray, cv2.CV_64F).var()
+    crop_arr = np.array(face_crop.convert('L'), dtype=np.float32)
+    grad_y = np.diff(crop_arr, axis=0)
+    grad_x = np.diff(crop_arr, axis=1)
+    variance = float(np.var(grad_y) + np.var(grad_x))
     
     splicing_risk = 0.0
-    if laplacian_var < 40.0:
+    status_note = "Standard portrait ROI localized & texture profile valid"
+    if variance < 80.0:
         splicing_risk = 35.0
-        status_note += " (Potential low-texture/splicing anomaly)"
+        status_note = "Warning: Flat boundary variance detected (Potential photo-swap)"
         
     return face_crop, splicing_risk, status_note
 
@@ -131,38 +105,26 @@ def extract_metadata_audit(image_pil):
     return timestamp, software
 
 # ==========================================
-# MODULE 1 & 2: OCR EXTRACTION & VALIDATION
+# MODULE 1 & 2: REAL OCR & RULE VALIDATION
 # ==========================================
-@st.cache_resource
-def load_ocr_engine():
+def perform_real_ocr(image_pil):
+    """Executes live Tesseract OCR on the ingested document."""
     try:
-        import easyocr
-        return easyocr.Reader(['en'], gpu=False)
-    except Exception:
-        return None
+        gray = image_pil.convert('L')
+        # Contrast adjustment for clean OCR text
+        enhanced = ImageEnhance.Contrast(gray).enhance(1.8)
+        text = pytesseract.image_to_string(enhanced)
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
+        return text, lines
+    except Exception as e:
+        return "", [f"OCR Engine Notification: {str(e)}"]
 
-ocr_reader = load_ocr_engine()
-
-def extract_document_text(image_pil):
-    img_array = np.array(image_pil.convert('RGB'))
-    extracted_lines = []
-    
-    if ocr_reader:
-        try:
-            results = ocr_reader.readtext(img_array, detail=0)
-            extracted_lines = results
-        except Exception:
-            pass
-
-    full_text = " ".join(extracted_lines)
-    return full_text, extracted_lines
-
-def audit_document_rules(text_corpus):
+def audit_document_payload(text_corpus):
     fields = {
         "Document Number": "Unresolved",
         "Date of Birth": "Unresolved",
         "Expiration Date": "Unresolved",
-        "Layout Syntax": "Standard"
+        "Mathematical Checksum": "Pending Analysis"
     }
     flags = []
     checks_passed = []
@@ -173,18 +135,20 @@ def audit_document_rules(text_corpus):
         candidate_num = twelve_digit_matches[0].replace(" ", "")
         fields["Document Number"] = "[Redacted 12-Digit ID]"
         if validate_verhoeff(candidate_num):
+            fields["Mathematical Checksum"] = "PASSED (Verhoeff D5 Valid)"
             checks_passed.append("Official 12-Digit Mathematical Checksum Validated")
         else:
+            fields["Mathematical Checksum"] = "FAILED (Checksum Mismatch)"
             flags.append("SECURITY ALERT: Altered/Fake ID Number (Verhoeff Checksum Failed)")
     else:
-        doc_id_match = re.search(r'\b[A-Z0-9]{6,14}\b', text_corpus)
+        doc_id_match = re.search(r'\b[A-Z0-9]{7,14}\b', text_corpus)
         if doc_id_match:
             fields["Document Number"] = doc_id_match.group(0)
-            checks_passed.append("Credential Serial Pattern Identified")
+            checks_passed.append("Credential Serial Pattern Localized")
         else:
-            flags.append("Document Identification Number not detected")
+            flags.append("Document Serial Pattern not recognized in text stream")
 
-    # 2. Date parsing
+    # 2. Date checks
     dates = re.findall(r'\b(?:\d{2}[-/.]\d{2}[-/.]\d{4}|\d{4}[-/.]\d{2}[-/.]\d{2})\b', text_corpus)
     if len(dates) >= 2:
         fields["Date of Birth"] = dates[0]
@@ -192,13 +156,13 @@ def audit_document_rules(text_corpus):
         checks_passed.append("DOB & Expiry Date patterns identified")
     elif len(dates) == 1:
         fields["Date of Birth"] = dates[0]
-        checks_passed.append("Primary Timestamp localized")
+        checks_passed.append(f"Primary Credential Date Localized ({dates[0]})")
     else:
         flags.append("Standard date structures not recognized")
 
-    # 3. State security header check
+    # 3. State security header verification
     if any(k in text_corpus.upper() for k in ["GOVERNMENT", "INDIA", "AUTHORITY", "ENROLMENT", "IDENTITY"]):
-        checks_passed.append("Official Emblems / Department Keyword Headers Verified")
+        checks_passed.append("Official Department Emblems / Keyword Headers Verified")
     else:
         flags.append("Missing standard state security header syntax")
 
@@ -222,16 +186,16 @@ if uploaded_file is not None:
     with c_right:
         st.subheader("🛡️ Forensic Triage Dashboard")
         
-        # Execute Forensic Engines
+        # Forensics
         ela_map, tamper_score = perform_ela(doc_img)
         meta_ts, meta_soft = extract_metadata_audit(doc_img)
         face_patch, face_risk, face_msg = extract_and_verify_face(doc_img)
         
-        # OCR & Rule Checks
-        full_text, raw_lines = extract_document_text(doc_img)
-        fields, passed_rules, failed_rules = audit_document_rules(full_text)
+        # Real OCR Extraction
+        ocr_text, ocr_lines = perform_real_ocr(doc_img)
+        fields, passed_rules, failed_rules = audit_document_payload(ocr_text)
         
-        # Risk Aggregation (Penalize heavily for checksum failure)
+        # Composite Fraud Risk Calculation
         rule_risk_penalty = len(failed_rules) * 20.0
         composite_risk = round(tamper_score * 0.40 + face_risk * 0.20 + rule_risk_penalty * 0.40, 2)
         composite_risk = min(100.0, composite_risk)
@@ -273,11 +237,10 @@ if uploaded_file is not None:
     
     col_m3, col_m4 = st.columns(2)
     with col_m3:
-        st.subheader("📋 Module 1: OCR Field Extraction")
+        st.subheader("📋 Module 1: Real OCR Extracted Payload")
         st.json(fields)
-        if raw_lines:
-            with st.expander("View Raw Extracted Lines"):
-                st.write(raw_lines)
+        with st.expander("View Raw Real-Time OCR Text Stream"):
+            st.write(ocr_lines if ocr_lines else "Processing image stream...")
                 
     with col_m4:
         st.subheader("⚖️ Module 2: Document Rule Validation")
@@ -290,4 +253,6 @@ if uploaded_file is not None:
                 st.markdown(f"- :red[{f}]")
         else:
             st.write("- :green[All structural checks matched standard schemas.]")
+            
+    
     
